@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { width: 250px; padding: 15px; font-family: sans-serif; }
+        .group { margin-bottom: 15px; }
+        label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 13px; }
+        select, input[type=range] { width: 100%; margin-bottom: 5px; }
+        .status { padding: 5px; text-align: center; border-radius: 3px; font-weight: bold; margin-bottom: 15px; }
+        .connected { background: #d4edda; color: #155724; }
+        .disconnected { background: #f8d7da; color: #721c24; }
+        .toggle-group { display: flex; align-items: center; justify-content: space-between; }
+        .toggle-label { font-weight: normal; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div id="status" class="status disconnected">Disconnected</div>
+
+    <div class="group">
+        <label>MIDI OUT (To DAW)</label>
+        <select id="outPort"><option>Select Port...</option></select>
+    </div>
+
+    <div class="group">
+        <label>MIDI IN (From Hardware)</label>
+        <select id="inPort"><option>Select Port...</option></select>
+    </div>
+
+    <hr>
+
+    <div class="group">
+        <div class="toggle-group">
+            <span class="toggle-label"><b>Enable Normalizer</b></span>
+            <input type="checkbox" id="audioToggle">
+        </div>
+        <small style="color:#666">Applies compression to active tab audio.</small>
+    </div>
+
+    <div class="group">
+        <label>Volume (<span id="volLabel">100</span>%)</label>
+        <input type="range" id="volume" min="0" max="200" value="100">
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

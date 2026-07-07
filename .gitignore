@@ -1,0 +1,26 @@
+# native-host dependencies
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.code-workspace
+
+# Local test / secrets
+.env
+.env.*
+*.local.json
+
+# Packaged extension builds
+*.zip
+dist/
+build/
+
+# Windows
+desktop.ini

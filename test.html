@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DAW Bridge Test</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        button { padding: 10px 20px; font-size: 16px; margin: 5px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>Web DAW Bridge Test</h1>
+    <p>Click the buttons below to send MIDI notes to your DAW via the extension.</p>
+    
+    <button id="noteC4">Play C4 (Note 60)</button>
+    <button id="noteE4">Play E4 (Note 64)</button>
+    <button id="noteG4">Play G4 (Note 67)</button>
+
+    <script>
+        function playNote(note) {
+            if (window.DawBridge) {
+                // Send Note On
+                window.DawBridge.sendMidi('noteon', 0, note, 100);
+                
+                // Send Note Off after 500ms
+                setTimeout(() => {
+                    window.DawBridge.sendMidi('noteoff', 0, note, 0);
+                }, 500);
+            } else {
+                alert('DAW Bridge extension not detected! Is it installed and enabled?');
+            }
+        }
+
+        document.getElementById('noteC4').addEventListener('click', () => playNote(60));
+        document.getElementById('noteE4').addEventListener('click', () => playNote(64));
+        document.getElementById('noteG4').addEventListener('click', () => playNote(67));
+    </script>
+</body>
+</html>
