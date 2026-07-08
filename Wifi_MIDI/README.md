@@ -44,6 +44,10 @@ Defaults in `Wifi_ESP32_MIDI.ino` (override by defining before include or editin
 - Removed unused / duplicate includes; reconnect reboot if WiFi drops
 - Kept Serial at 31250 for DIN — no debug prints on that UART
 
+## Test after flash
+
+See [TEST_AFTER_FLASH.md](../TEST_AFTER_FLASH.md) — **Wifi_MIDI** section. Minimum: provisioning AP, rtpMIDI session, DIN↔Net round-trip on status page.
+
 ## License
 
 MIT. See the repository [LICENSE](../LICENSE).

@@ -27,6 +27,10 @@ The original Web DAW Bridge integration contract remains in [DEVELOPER_SSOT.md](
 - Third-party dependency notes are listed in [NOTICE.md](NOTICE.md).
 - Contribution guidelines are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## License
+## Test after flash
+
+Firmware projects: run the bench checklist in [TEST_AFTER_FLASH.md](TEST_AFTER_FLASH.md) after every recompile and upload. Each sub-project README links the steps that apply to that sketch.
+
+---
 
 This repository is released under the MIT License. See [LICENSE](LICENSE).

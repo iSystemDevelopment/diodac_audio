@@ -28,6 +28,10 @@ Hardware and manufacturing filenames are preserved to avoid breaking external re
 - `pinMode` / `digitalWrite` setup corrected for button inputs
 - Mode / stop paths send note-offs and clear gate-CV to avoid stuck notes
 
+## Test after flash
+
+See [TEST_AFTER_FLASH.md](../TEST_AFTER_FLASH.md) — **Link_Drum** section. Minimum: transport start/stop, BPM timing, rest steps, no stuck MIDI notes.
+
 ## License
 
 MIT. See the repository [LICENSE](../LICENSE).

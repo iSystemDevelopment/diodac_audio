@@ -20,6 +20,16 @@ Chrome Manifest V3 extension that exposes a page-level `window.DawBridge` API an
 
 For the API contract, see [DEVELOPER_SSOT.md](../DEVELOPER_SSOT.md).
 
+## Test after reload
+
+| Step | Verify |
+|------|--------|
+| 1 | Native host running on `ws://localhost:8080` |
+| 2 | Extension loads unpacked; service worker active |
+| 3 | Open `test.html` — `window.DawBridge` API responds |
+| 4 | MIDI port list populates; send note on/off to DAW |
+| 5 | Popup shows connected state; reconnect after host restart |
+
 ## License
 
 MIT. See the repository [LICENSE](../LICENSE).

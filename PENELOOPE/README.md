@@ -26,6 +26,10 @@ The firmware uses Arduino/Teensy-style libraries visible in the source, includin
 - Flange and reverb reuse the current input sample instead of over-popping an empty queue
 - Clearer pin map, signal-path, and ISR-vs-UI comments
 
+## Test after flash
+
+See [TEST_AFTER_FLASH.md](../TEST_AFTER_FLASH.md) — **PENELOOPE** section. Minimum: dry path, each effect, footswitches, 5-minute soak without dropouts.
+
 ## License
 
 MIT. See the repository [LICENSE](../LICENSE).
