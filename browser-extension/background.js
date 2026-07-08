@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2026 DIODAC ELECTRONICS / iSystem Development
+ * Licensed under the MIT License.
+ * Contact: diodac.electronics@gmail.com
+ */
+
 let socket = null;
 let isConnected = false;
 let availablePorts = { inputs: [], outputs: [] };

@@ -1,6 +1,15 @@
 # native-host dependencies
 node_modules/
 
+# Build outputs
+build/
+dist/
+out/
+coverage/
+.pio/
+.pioenvs/
+.piolibdeps/
+
 # Logs
 *.log
 npm-debug.log*
@@ -15,12 +24,16 @@ Thumbs.db
 # Local test / secrets
 .env
 .env.*
+*.env
 *.local.json
+secrets/
+*.secret
+*.key
+*.pem
+credentials*.json
 
 # Packaged extension builds
 *.zip
-dist/
-build/
 
 # Windows
 desktop.ini

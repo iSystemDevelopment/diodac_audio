@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2026 DIODAC ELECTRONICS / iSystem Development
+ * Licensed under the MIT License.
+ * Contact: diodac.electronics@gmail.com
+ */
+
 // Inject the API script into the main page context
 const script = document.createElement('script');
 script.src = chrome.runtime.getURL('inject.js');

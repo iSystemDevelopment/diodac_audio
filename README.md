@@ -1,60 +1,32 @@
-# diodac_audio — Diodac Music Open Source
+# diodac_audio
 
-MIT-licensed browser ↔ native MIDI bridge for iSystem web audio apps (InfinityApp, Octopus, iDrum, etc.).
+Open source DIODAC / iSystem music technology projects, including browser MIDI tooling, embedded MIDI utilities, DSP pedal firmware, Gerber manufacturing files, and legacy microcontroller source where available.
 
-**Hub:** [isystem.app — Diodac Music](https://isystem.app/#music) · **Portfolio:** [diodac.org](https://diodac.org)
+Music hub: [isystem.app/#music](https://isystem.app/#music)  
+Portfolio: [diodac.org](https://diodac.org)  
+Contact: [diodac.electronics@gmail.com](mailto:diodac.electronics@gmail.com)
 
-**Full developer SSOT:** [DEVELOPER_SSOT.md](DEVELOPER_SSOT.md)
+## Project Catalogue
 
----
+| Project | Contents |
+| --- | --- |
+| [Web DAW Bridge browser extension](browser-extension/README.md) | Chrome MV3 extension that injects `window.DawBridge` for web apps and relays MIDI/audio controls through the local native host. |
+| [Web DAW Bridge native host](native-host/README.md) | Node.js WebSocket service on `ws://localhost:8080` using `easymidi` to route MIDI between the browser extension and local MIDI ports. |
+| [Link_Drum](Link_Drum/README.md) | Link_Drum firmware and production assets, including AT89C52 HEX, Atmega 328 Arduino source, Gerbers, BOM/CPL files, DXF panels, and pattern notes. |
+| [MIDI_Bass_Guitar](MIDI_Bass_Guitar/README.md) | PIC16F88 bass-to-MIDI assembly source, HEX output, and related source text. |
+| [PENELOOPE](PENELOOPE/README.md) | Teensy/Arduino DSP pedal firmware with display/audio processing source plus Gerbers, BOM/CPL, and front-panel files. |
+| [Wifi_MIDI](Wifi_MIDI/README.md) | ESP8266 WiFi MIDI bridge source using WiFiManager provisioning and AppleMIDI/rtpMIDI routing. |
 
-## Repository layout
+The original Web DAW Bridge integration contract remains in [DEVELOPER_SSOT.md](DEVELOPER_SSOT.md). Use it only for the `browser-extension/` and `native-host/` bridge workflow.
 
-```
-browser-extension/   Chrome MV3 — injects window.DawBridge
-native-host/         Node.js WebSocket server (port 8080) + MIDI
-test.html            Manual API smoke test
-```
+## Repository Notes
 
----
-
-## Quick start
-
-### Native host
-
-```bash
-cd native-host
-npm install
-node server.js
-```
-
-Windows: install [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) and create port **`Web DAW Bridge`**.
-
-### Extension
-
-1. Chrome → `chrome://extensions/` → Developer mode
-2. **Load unpacked** → select `browser-extension/`
-3. Confirm popup shows connected to `ws://localhost:8080`
-
----
-
-## Universal API (injected)
-
-```javascript
-if (window.DawBridge) {
-  window.DawBridge.sendMidi('noteon', 0, 60, 100);
-  window.DawBridge.onMidiMessage = (msg) => console.log(msg);
-}
-```
-
----
+- Hardware manufacturing files are kept in their original folder layout and filenames to avoid breaking references from CAD/CAM tools.
+- Some source paths include spaces, such as `Link_Drum/Link_Drum_Code/Atmega 328/Link_Drum_Rev_1.01/Link_Drum_Rev_1.01.ino`.
+- `test.html` is a manual smoke-test page for the Web DAW Bridge API.
+- Third-party dependency notes are listed in [NOTICE.md](NOTICE.md).
+- Contribution guidelines are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
-
----
-
-## Contact
-
-diodac.electronics@gmail.com · https://isystem.app
+This repository is released under the MIT License. See [LICENSE](LICENSE).

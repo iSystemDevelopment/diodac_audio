@@ -1,0 +1,327 @@
+
+#define EY -1
+#define SEQUENCE 16
+unsigned int BPM = 0;
+
+ int sequence [SEQUENCE][2] =  {
+  36, BPM,
+  EY, BPM,
+  49, BPM,
+  38, BPM,
+  EY, BPM,
+  EY, BPM,
+  36, BPM,
+  48, BPM,
+  50, BPM,
+  50, BPM,
+  EY, BPM,
+  48, BPM,
+  EY, BPM,
+  60, BPM,
+  EY, BPM,
+  43, BPM 
+} ;
+
+int sequence1[SEQUENCE][2] = {
+  36, BPM,
+  36, BPM,
+  49, BPM,
+  38, BPM,
+  EY, BPM,
+  EY, BPM,
+  37, BPM,
+  36, BPM,
+  50, BPM,
+  EY, BPM,
+  EY, BPM,
+  48, BPM,
+  EY, BPM,
+  61, BPM,
+  EY, BPM,
+  40, BPM
+} ;
+
+ int sequence2[SEQUENCE][2]  = {
+  39, BPM,
+  35, BPM,
+  49, BPM,
+  38, BPM,
+  EY, BPM,
+  EY, BPM,
+  37, BPM,
+  36, BPM,
+  62, BPM,
+  EY, BPM,
+  EY, BPM,
+  48, BPM,
+  EY, BPM,
+  36, BPM,
+  EY, BPM,
+  40, BPM
+} ;
+
+ int sequence3[SEQUENCE][2]  = {
+  39, BPM,
+  60, BPM,
+  45, BPM,
+  39, BPM,
+  EY, BPM,
+  39, BPM,
+  36, BPM,
+  36, BPM,
+  36, BPM,
+  EY, BPM,
+  EY, BPM,
+  61, BPM,
+  EY, BPM,
+  71, BPM,
+  EY, BPM,
+  EY, BPM
+} ;
+
+ int sequence4[SEQUENCE][2] = {
+  49, BPM,
+  45, BPM,
+  49, BPM,
+  48, BPM,
+  EY, BPM,
+  EY, BPM,
+  37, BPM,
+  56, BPM,
+  52, BPM,
+  EY, BPM,
+  EY, BPM,
+  58, BPM,
+  EY, BPM,
+  56, BPM,
+  EY, BPM,
+  50, BPM
+} ;
+
+ int sequence5[SEQUENCE][2]  = {
+  69, BPM,
+  65, BPM,
+  69, BPM,
+  48, BPM,
+  EY, BPM,
+  EY, BPM,
+  57, BPM,
+  36, BPM,
+  72, BPM,
+  EY, BPM,
+  EY, BPM,
+  58, BPM,
+  EY, BPM,
+  36, BPM,
+  EY, BPM,
+  60, BPM
+} ;
+
+ int sequence6[SEQUENCE][2]  = {
+  79, BPM,
+  75, BPM,
+  79, BPM,
+  68, BPM,
+  EY, BPM,
+  EY, BPM,
+  47, BPM,
+  36, BPM,
+  82, BPM,
+  EY, BPM,
+  EY, BPM,
+  38, BPM,
+  EY, BPM,
+  56, BPM,
+  EY, BPM,
+  50, BPM
+} ;
+
+ int sequence7[SEQUENCE][2]  = {
+  69, BPM,
+  EY, BPM,
+  39, BPM,
+  38, BPM,
+  EY, BPM,
+  36, BPM,
+  EY, BPM,
+  36, BPM,
+  62, BPM,
+  EY, BPM,
+  EY, BPM,
+  36, BPM,
+  EY, BPM,
+  36, BPM,
+  EY, BPM,
+  36, BPM
+} ;
+
+ int sequence8[SEQUENCE][2] = {
+  EY, BPM,
+  36, BPM,
+  36, BPM,
+  36, BPM,
+  EY, BPM,
+  EY, BPM,
+  37, BPM,
+  36, BPM,
+  56, BPM,
+  EY, BPM,
+  EY, BPM,
+  58, BPM,
+  EY, BPM,
+  36, BPM,
+  EY, BPM,
+  36, BPM
+} ;
+
+int sequence9[SEQUENCE][2]  = {
+  70, BPM,
+  49, BPM,
+  36, BPM,
+  38, BPM,
+  EY, BPM,
+  36, BPM,
+  EY, BPM,
+  36, BPM,
+  62, BPM,
+  EY, BPM,
+  EY, BPM,
+  36, BPM,
+  EY, BPM,
+  38, BPM,
+  EY, BPM,
+  48, BPM
+} ;
+
+ int sequence10[SEQUENCE][2] = {
+  36, BPM,
+  39, BPM,
+  EY, BPM,
+  36, BPM,
+  EY, BPM,
+  EY, BPM,
+  37, BPM,
+  36, BPM,
+  52, BPM,
+  EY, BPM,
+  EY, BPM,
+  68, BPM,
+  EY, BPM,
+  56, BPM,
+  EY, BPM,
+  70, BPM
+} ;
+
+ int sequence11[SEQUENCE][2]  = {
+  36, BPM,
+  EY, BPM,
+  52, BPM,
+  EY, BPM,
+  36, BPM,
+  EY, BPM,
+  52, BPM,
+  EY, BPM,
+  36, BPM,
+  EY, BPM,
+  52, BPM,
+  EY, BPM,
+  36, BPM,
+  EY, BPM,
+  52, BPM,
+  EY, BPM
+} ;
+
+ int sequence12[SEQUENCE][2]  = {
+  39, BPM,
+  39, BPM,
+  99, BPM,
+  36, BPM,
+  EY, BPM,
+  EY, BPM,
+  36, BPM,
+  36, BPM,
+  36, BPM,
+  EY, BPM,
+  EY, BPM,
+  49, BPM,
+  EY, BPM,
+  38, BPM,
+  EY, BPM,
+  47, BPM
+} ;
+
+ int sequence13[SEQUENCE][2]  = {
+  35, BPM,
+  EY, BPM,
+  49, BPM,
+  37, BPM,
+  35, BPM,
+  37, BPM,
+  49, BPM,
+  EY, BPM,
+  35, BPM,
+  EY, BPM,
+  49, BPM,
+  37, BPM,
+  35, BPM,
+  EY, BPM,
+  49, BPM,
+  EY, BPM
+} ;
+
+ int sequence14[SEQUENCE][2]  = {
+  36, BPM,
+  39, BPM,
+  46, BPM,
+  36, BPM,
+  39, BPM,
+  47, BPM,
+  36, BPM,
+  50, BPM,
+  47, BPM,
+  36, BPM,
+  53, BPM,
+  36, BPM,
+  42, BPM,
+  37, BPM,
+  37, BPM,
+  36, BPM
+} ;
+
+ int sequence15[SEQUENCE][2]  = {
+  36, BPM,
+  39, BPM,
+  36, BPM,
+  EY, BPM,
+  52, BPM,
+  50, BPM,
+  36, BPM,
+  50, BPM,
+  47, BPM,
+  36, BPM,
+  41, BPM,
+  36, BPM,
+  41, BPM,
+  37, BPM,
+  40, BPM,
+  36, BPM
+} ;
+
+ int sequence16[SEQUENCE][2]  = {
+  36, BPM,
+  36, BPM,
+  36, BPM,
+  EY, BPM,
+  36, BPM,
+  43, BPM,
+  EY, BPM,
+  36, BPM,
+  47, BPM,
+  36, BPM,
+  EY, BPM,
+  EY, BPM,
+  36, BPM,
+  37, BPM,
+  40, BPM,
+  36, BPM
+} ;

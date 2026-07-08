@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2026 DIODAC ELECTRONICS / iSystem Development
+ * Licensed under the MIT License.
+ * Contact: diodac.electronics@gmail.com
+ */
+
 document.addEventListener('DOMContentLoaded', () => {
     const statusDiv = document.getElementById('status');
     const outPortSelect = document.getElementById('outPort');

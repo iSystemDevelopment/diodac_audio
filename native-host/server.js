@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2026 DIODAC ELECTRONICS / iSystem Development
+ * Licensed under the MIT License.
+ * Contact: diodac.electronics@gmail.com
+ */
+
 const WebSocket = require('ws');
 const easymidi = require('easymidi');
 

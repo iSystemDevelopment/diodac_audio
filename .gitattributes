@@ -1,0 +1,11 @@
+* text=auto
+
+*.gbr binary
+*.drl binary
+*.dxf binary
+*.hex text eol=crlf
+*.HEX text eol=crlf
+*.pdf binary
+*.jpg binary
+*.jpeg binary
+*.png binary
