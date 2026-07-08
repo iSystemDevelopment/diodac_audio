@@ -3,56 +3,96 @@
    Licensed under the MIT License.
    Contact: diodac.electronics@gmail.com
 
-   Link_Drum REV 1.01
-   Diodac Electronics
-   www.diodac.org
-*/
-#include <MIDI.h>
-MIDI_CREATE_DEFAULT_INSTANCE();
-#include <avr/pgmspace.h>
-#define b_read pgm_read_byte_near
-#define w_read pgm_read_dword_near
-#define EY         128
-#define cv_note    A1
-#define cv_pitch   A0
-#define cv_bpm     A4
-#define cv_changer A2
-#define cv_rhythm  A3
+   Link_Drum REV 1.01 — ATmega328
+   Diodac Electronics · www.diodac.org
 
-#define sq_trigger       2
-#define changer          9
-#define note_trigger     4
-#define velocity_trigger 5
-#define play             6
-#define midi_mode        7
-#define midi_mode_led    8
-#define cv_out           3
+   Modes
+   -----
+   - Sequencer mode (default): internal pattern player + CV controls
+   - MIDI mode: MIDI-in -> gate / CV out (handler callbacks)
+
+   Notes about MIDI channel
+   ------------------------
+   Raw MIDI status bytes use channel index 0..15.
+   midi_channel = 9 means General MIDI "Channel 10" (drums).
+*/
+
+#include <MIDI.h>
+#include <avr/pgmspace.h>
+
+MIDI_CREATE_DEFAULT_INSTANCE();
+
+// PROGMEM helpers (patterns live in flash)
+#define b_read  pgm_read_byte_near
+
+// Pattern rest marker (not a valid MIDI note for this device)
+#define EY  128
+
+// ---- Analog CV inputs ----
+#define cv_pitch    A0
+#define cv_note     A1
+#define cv_changer  A2
+#define cv_rhythm   A3
+#define cv_bpm      A4
+
+// ---- Digitals ----
+#define sq_trigger        2   // play/stop (INPUT_PULLUP, active LOW)
+#define cv_out            3   // PWM CV / note proxy
+#define note_trigger      4   // manual note gate / transpose
+#define velocity_trigger  5   // velocity select
+#define play              6   // click / play pulse out
+#define midi_mode         7   // toggle MIDI vs sequencer
+#define midi_mode_led     8
+#define changer           9   // pattern/instrument fill enable
 #define gate_out         10
 
+// How many steps of each 16-deep pattern row are actually played
+static const byte kPatternLength = 14;
+static const byte kPatternCount  = 34;  // rows in sequence[][]
+
+// MIDI channel index 0..15 (9 == GM drum channel 10)
+static const byte kMidiChannel = 9;
+
+static const byte kMinNote = 0;
+static const byte kMaxNote = 127;
+
+// ---- Runtime state ----
 int rhythm_raw, rhythm;
 int pitch_raw, pitch_storage, pitchLSB, pitchMSB, note_raw;
 int changer_raw, changer_instrument;
+int last_pitch_storage = -1;  // only send pitch bend when it changes
 
-int button_action = HIGH, midi_button_action = HIGH;
-boolean on = false, midi_on = false;
-byte midi_channel = 9, note, note_MSG;
-byte velocity_level = 63, velocity_off = 0;
-byte note_hold, note_flag = 0;
-byte minNote = 0, maxNote = 127;
+int button_action = HIGH;
+int midi_button_action = HIGH;
+boolean sequencer_on = false;
+boolean midi_mode_on = false;
 
-//Sequencer
-byte note_sq = 0, bLength = 14;
-unsigned long time = 0, beats_per_minute = 120;
-long last_time = 0;
+byte note = 0;
+byte note_MSG = 0;
+byte note_hold = 0;
+byte note_flag = 0;           // 0 idle, 1 onset, 2 sustain, 3 release
+byte velocity_level = 63;
+static const byte velocity_off = 0;
 
+// Sequencer timing
+byte note_sq = 0;
+unsigned long next_step_ms = 0;
+unsigned long beats_per_minute = 120;
+
+/*
+   Pattern table: 34 rhythms/scales x 16 steps (only first kPatternLength used).
+   Values are MIDI note numbers, or EY (128) for a rest.
+   Last rows are labeled scale helpers in the original source.
+*/
 const PROGMEM byte sequence[34][16] = {
+  // rows 0..25 — performance / drum-style patterns
   36, 39, 41, 43, 45, 48, 51, 53, 55, 57, 60, 48, 51, 53, 55, 57,
-  41, 43, 44, 46, 48, 50, 36, 39, 41, 43, 45, 48, 51, 53, 55, 57, 
+  41, 43, 44, 46, 48, 50, 36, 39, 41, 43, 45, 48, 51, 53, 55, 57,
   39, 41, 42, 43, 45, 48, 51, 53, 54, 46, 48, 50, 36, 39, 41, 43,
-  36, 37, 41, 43, 44, 48, 49, 53, 55, 56, 60, 46, 48, 50, 36, 39, 
-  35, 36, 38, 39, 41, 43, 44, 47, 48, 50, 51, 53, 55, 56, 59, 60, 
+  36, 37, 41, 43, 44, 48, 49, 53, 55, 56, 60, 46, 48, 50, 36, 39,
+  35, 36, 38, 39, 41, 43, 44, 47, 48, 50, 51, 53, 55, 56, 59, 60,
   35, 36, 38, 39, 42, 43, EY, 46, 48, 50, EY, 54, 55, EY, 58, EY,
-  39, 41, 43, 44, 46, EY, 49, EY, 53, 55, EY, 58, 60, EY, 63, 65, 
+  39, 41, 43, 44, 46, EY, 49, EY, 53, 55, EY, 58, 60, EY, 63, 65,
   36, 38, EY, 42, EY, 45, 47, 48, 50, EY, EY, 55, 57, EY, 60, EY,
   36, 36, 36, EY, 36, 43, EY, 36, 47, 36, EY, EY, 36, 37, 40, 36,
   36, 39, 36, EY, 52, 50, 36, 50, 47, 36, 41, 36, 41, 37, 40, 36,
@@ -72,308 +112,371 @@ const PROGMEM byte sequence[34][16] = {
   36, EY, 36, EY, 38, EY, 36, EY, 36, EY, 36, EY, 38, EY, EY, 43,
   36, EY, 49, 38, EY, EY, 36, 48, 50, 50, EY, 48, EY, 60, EY, 43,
   40, EY, 46, EY, 58, EY, 36, EY, 36, EY, 46, EY, 58, EY, 69, 72,
-  35, 36, 37, 37, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, // 1.  Chromatic
-  35, 36, 37, 40, 41, 43, 44, 47, 48, 49, 52, 53, 55, 56, 59, 62, // 2.  Klezmer
-  45, 48, 50, 52, 55, 57, 60, 62, 64, 67, 69, 72, 74, 76, 78, 80, // 3.  Major_5
-  38, 39, 41, 43, 45, 46, 48, 50, 51, 53, 55, 57, 58, 60, 62, 64, // 4.  Dorian
-  41, 43, 44, 47, 48, 50, 51, 53, 55, 56, 59, 60, 62, 63, 66, 68,  // 5.  Aeolian
-  48, 51, 53, 55, 57, 60, 63, 65, 67, 69, 72, 75, 77, 79, 81, 82, // 6.  Minor_5
-  36, 38, 39, 41, 43, 44, 46, 48, 50, 51, 53, 55, 56, 58, 60, 62, // 7.  Minor
-  41, 42, 43, 45, 48, 51, 53, 54, 55, 57, 60, 63, 65, 66, 67, 69  // 8.  Blues
+  // rows 26..33 — scale helpers
+  35, 36, 37, 37, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, // Chromatic
+  35, 36, 37, 40, 41, 43, 44, 47, 48, 49, 52, 53, 55, 56, 59, 62, // Klezmer
+  45, 48, 50, 52, 55, 57, 60, 62, 64, 67, 69, 72, 74, 76, 78, 80, // Major_5
+  38, 39, 41, 43, 45, 46, 48, 50, 51, 53, 55, 57, 58, 60, 62, 64, // Dorian
+  41, 43, 44, 47, 48, 50, 51, 53, 55, 56, 59, 60, 62, 63, 66, 68, // Aeolian
+  48, 51, 53, 55, 57, 60, 63, 65, 67, 69, 72, 75, 77, 79, 81, 82, // Minor_5
+  36, 38, 39, 41, 43, 44, 46, 48, 50, 51, 53, 55, 56, 58, 60, 62, // Minor
+  41, 42, 43, 45, 48, 51, 53, 54, 55, 57, 60, 63, 65, 66, 67, 69  // Blues
 };
 
-void setup() {
+// ---- MIDI helpers (raw UART @ 31250) ----
+void midiMsg(byte cmd, byte data1, byte data2);
+void midi_note_on(byte channel, byte noteMIDI, byte velocityMIDI);
+void midi_note_off(byte channel, byte noteMIDI, byte velocityMIDI);
+void pitch_bend(byte channel, byte lsb, byte msb);
+void midi_all_notes_off(byte channel);
 
+void HandleNoteOn(byte channel, byte incoming_note, byte velocity);
+void HandleNoteOff(byte channel, byte incoming_note, byte velocity);
+
+void midi_button();
+void sq_button();
+void sequencer();
+void read_controls();
+void update_pitch_bend_if_needed(bool force);
+void handle_manual_note();
+
+static byte clamp_midi_note(int value) {
+  if (value < 0) return 0;
+  if (value > 127) return 127;
+  return (byte)value;
+}
+
+void setup() {
+  // Hardware UART is also the MIDI port on this hardware
   Serial.begin(31250);
   MIDI.begin(MIDI_CHANNEL_OMNI);
+  MIDI.setHandleNoteOn(HandleNoteOn);
+  MIDI.setHandleNoteOff(HandleNoteOff);
 
+  // Buttons / triggers
+  pinMode(sq_trigger, INPUT_PULLUP);      // active LOW
   pinMode(velocity_trigger, INPUT);
-  pinMode(velocity_trigger, LOW);
+  digitalWrite(velocity_trigger, LOW);    // pull-up off (external wiring)
   pinMode(note_trigger, INPUT);
-  pinMode(note_trigger, LOW);
+  digitalWrite(note_trigger, LOW);
   pinMode(midi_mode, INPUT);
-  pinMode(midi_mode, LOW);
+  digitalWrite(midi_mode, LOW);
   pinMode(changer, INPUT);
-  pinMode(sq_trigger, INPUT_PULLUP);
-  pinMode(changer, LOW);
+  digitalWrite(changer, LOW);
+
+  // Outputs
   pinMode(midi_mode_led, OUTPUT);
   pinMode(cv_out, OUTPUT);
   pinMode(play, OUTPUT);
   pinMode(gate_out, OUTPUT);
-  pinMode(gate_out, LOW);
+  digitalWrite(gate_out, LOW);
+  digitalWrite(midi_mode_led, LOW);
+  digitalWrite(play, LOW);
 
-  unsigned long milliseconds_per_minute = 10000 * 60;
-  time = millis() + milliseconds_per_minute / beats_per_minute;
-
-  MIDI.setHandleNoteOn(HandleNoteOn);
-  MIDI.setHandleNoteOff(HandleNoteOff);
-
+  // Arm first sequencer step using 60_000 ms/min (was incorrectly 10000*60)
+  if (beats_per_minute < 1) beats_per_minute = 1;
+  next_step_ms = millis() + (60000UL / beats_per_minute);
 }
 
 void loop() {
-
   midi_button();
 
-  if (midi_on == true) {
+  if (midi_mode_on) {
     MIDI.read();
     digitalWrite(midi_mode_led, HIGH);
-
   } else {
-    if (midi_on == false) {
-      digitalWrite(midi_mode_led, LOW);
-      digitalWrite(gate_out, LOW);
+    digitalWrite(midi_mode_led, LOW);
 
-      sq_button();
-      sequencer();
+    sq_button();
+    read_controls();
+    update_pitch_bend_if_needed(false);
+    sequencer();
+    handle_manual_note();
+  }
 
-      // Velocity
-      if ((digitalRead(velocity_trigger) == HIGH)) {
+  // Soft rate-limit for ADC / button scanning (keeps MIDI UX responsive enough)
+  delay(15);
+}
 
-        velocity_level = 127;
+// -----------------------------------------------------------------------------
+// Control reading
+// -----------------------------------------------------------------------------
 
-      } else
-      { if ((digitalRead(velocity_trigger) == LOW)) {
+void read_controls() {
+  // Velocity switch: high accent vs mid
+  if (digitalRead(velocity_trigger) == HIGH) {
+    velocity_level = 127;
+  } else {
+    velocity_level = 63;
+  }
 
-          velocity_level = 63;
+  // Tempo (BPM). Keep integer map — Arduino map() is long-based.
+  beats_per_minute = (unsigned long)map(analogRead(cv_bpm), 0, 1023, 15, 415);
+  if (beats_per_minute < 1) beats_per_minute = 1;
 
-        }
+  // Pattern select: 0 .. kPatternCount-1
+  rhythm_raw = analogRead(cv_rhythm);
+  rhythm = map(rhythm_raw, 0, 1023, 0, kPatternCount - 1);
+  if (rhythm < 0) rhythm = 0;
+  if (rhythm > (kPatternCount - 1)) rhythm = kPatternCount - 1;
+
+  // 14-bit pitch bend from CV (0..16383)
+  pitch_raw = analogRead(cv_pitch);
+  pitch_storage = map(pitch_raw, 0, 1023, 0, 16383);
+  pitchLSB = pitch_storage & 0x007F;
+  pitchMSB = (pitch_storage >> 7) & 0x007F;
+
+  // Instrument / fill amount (inverted pot)
+  changer_raw = analogRead(cv_changer);
+  changer_instrument = map(changer_raw, 0, 1023, 1023, 0);
+
+  note_raw = analogRead(cv_note);
+  // Base note for manual trigger (held while pressed)
+  if (digitalRead(note_trigger) == HIGH && !sequencer_on) {
+    note = (byte)map(note_raw, 0, 1023, 34, 70);
+    note_MSG = note;
+  }
+}
+
+void update_pitch_bend_if_needed(bool force) {
+  if (!force && pitch_storage == last_pitch_storage) {
+    return;
+  }
+  last_pitch_storage = pitch_storage;
+  pitch_bend(kMidiChannel, (byte)pitchLSB, (byte)pitchMSB);
+}
+
+// -----------------------------------------------------------------------------
+// Manual note state machine (sequencer stopped)
+// -----------------------------------------------------------------------------
+
+void handle_manual_note() {
+  // Only used when the sequencer is not running
+  if (sequencer_on) {
+    return;
+  }
+
+  switch (note_flag) {
+    case 0:  // wait for trigger rising edge
+      if (digitalRead(note_trigger) == HIGH) {
+        delay(2);  // tiny de-noise
+        note_flag = 1;
       }
-      beats_per_minute = map(analogRead(cv_bpm), 0.0, 1023.0, 15.0, 415.0);
-      rhythm_raw = analogRead(cv_rhythm);
-      rhythm = map(rhythm_raw, 0, 1023, 0, 33);
+      break;
 
-      pitch_raw = analogRead(cv_pitch);
-      pitch_storage = map(pitch_raw, 0, 1023, 0, 16383);
-      pitchLSB = pitch_storage & 0x007F;
-      pitchMSB = (pitch_storage >> 7) & 0x007F;
-      for (int i = 0; i < 3; i++) {
-        pitch_bend((0xE0 | midi_channel), pitchLSB, pitchMSB);
+    case 1:  // note on
+      digitalWrite(gate_out, HIGH);
+
+      if (digitalRead(changer) == HIGH) {
+        // Add a small fill offset from the changer CV
+        int fill = map(changer_instrument, 1023, 0, 0, 30);
+        note_MSG = clamp_midi_note((int)note_MSG + fill);
       }
 
-      changer_raw = analogRead(cv_changer);
-      changer_instrument = map(changer_raw, 0, 1023, 1023, 0);
-      note_raw = analogRead(cv_note);
-      if ((digitalRead(note_trigger) == HIGH && on == false)) {
+      midi_note_on(kMidiChannel, note_MSG, velocity_level);
+      update_pitch_bend_if_needed(true);
+      note_hold = note_MSG;
+      note_flag = 2;
+      break;
 
-        note = map(note_raw, 0, 1023, 34, 70);
-        note_MSG = note;
-      }
-
-      switch (note_flag) {
-
-        case 0:  // wait for tigger
-
-          if ((digitalRead(note_trigger) == HIGH && on == false)) {
-            delay(2);
-            note_flag = 1;
-
-          }
-
-          break;
-        case 1:  //note_on
-          digitalWrite(gate_out, HIGH && on == false);
-          if (digitalRead(changer) == HIGH && on == false) {
-            byte fill = map(changer_instrument, 1023, 0, 0, 30);
-            note_MSG =  note_MSG + fill;
-          }
-          midi_note_on(midi_channel, note_MSG, velocity_level);
-          pitch_bend((0xE0 | midi_channel), pitchLSB, pitchMSB);
-
+    case 2:  // held / legato
+      if (digitalRead(note_trigger) == HIGH) {
+        if (note_MSG != note_hold) {
+          // Note changed while held — legato re-trigger
+          digitalWrite(gate_out, HIGH);
+          midi_note_off(kMidiChannel, note_hold, velocity_off);
+          midi_note_on(kMidiChannel, note_MSG, velocity_level);
           note_hold = note_MSG;
-          note_flag = 2;
-
-          break;
-        case 2:  //note processing
-          if ((digitalRead(note_trigger) == HIGH && on == false)) {
-            if (note_MSG == note_hold) {
-              pitch_bend((0xE0 | midi_channel), pitchLSB, pitchMSB);
-            }
-
-            else {
-              digitalWrite(gate_out, HIGH);
-              midi_note_off(midi_channel, note_hold, velocity_off);
-              midi_note_on(midi_channel, note_MSG, velocity_level);
-              pitch_bend((0xE0 | midi_channel), pitchLSB, pitchMSB);
-              note_hold = note_MSG;
-
-            }
-          }
-
-          else {
-
-            note_flag = 3;
-
-          }
-          break;
-        case 3: //note_off
-          digitalWrite(gate_out, LOW);
-          midi_note_off(midi_channel, note_hold, velocity_off);
-          midi_note_off(midi_channel, note_MSG, velocity_off);
-          pitch_bend((0xE0 | midi_channel), pitchLSB, pitchMSB);
-          note_flag = 0;
-          break;
+        }
+        update_pitch_bend_if_needed(false);
+      } else {
+        note_flag = 3;
       }
+      break;
+
+    case 3:  // note off
+      digitalWrite(gate_out, LOW);
+      midi_note_off(kMidiChannel, note_hold, velocity_off);
+      if (note_MSG != note_hold) {
+        midi_note_off(kMidiChannel, note_MSG, velocity_off);
+      }
+      update_pitch_bend_if_needed(true);
+      note_flag = 0;
+      break;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Buttons (edge-detect with simple debounce)
+// -----------------------------------------------------------------------------
+
+void sq_button() {
+  int button_state = digitalRead(sq_trigger);
+
+  // Active LOW with INPUT_PULLUP
+  if (button_state == LOW && button_state != button_action) {
+    sequencer_on = !sequencer_on;
+    button_action = button_state;
+    delay(20);
+
+    if (!sequencer_on) {
+      // Stop cleanly: kill sounding sequencer note and drop gate/CV
+      midi_note_off(kMidiChannel, note_sq, velocity_off);
+      digitalWrite(gate_out, LOW);
+      analogWrite(cv_out, 0);
+    } else {
+      // Start ASAP on next loop tick
+      next_step_ms = millis();
     }
   }
 
-  delay(30);
-}
-
-void sq_button()
-{
-  int button_state = digitalRead(sq_trigger);
-
-  if (button_state == LOW && button_state != button_action)
-  {
-    on = ! on;
-    button_action = button_state;
-    delay(20);
-  }
-
-  if (button_state == HIGH && button_state != button_action)
-  {
+  if (button_state == HIGH && button_state != button_action) {
     button_action = button_state;
     delay(20);
   }
 }
 
-void midi_button()
-{
+void midi_button() {
   int midi_button_state = digitalRead(midi_mode);
 
-  if (midi_button_state == HIGH && midi_button_state != midi_button_action)
-  {
-    midi_on = ! midi_on;
+  // Active HIGH in original hardware wiring
+  if (midi_button_state == HIGH && midi_button_state != midi_button_action) {
+    midi_mode_on = !midi_mode_on;
     midi_button_action = midi_button_state;
     delay(20);
+
+    // Avoid stuck notes when changing modes
+    midi_all_notes_off(kMidiChannel);
+    digitalWrite(gate_out, LOW);
+    analogWrite(cv_out, 0);
+    note_flag = 0;
+
+    if (midi_mode_on) {
+      sequencer_on = false;
+    }
   }
 
-  if (midi_button_state == LOW && midi_button_state != midi_button_action)
-  {
+  if (midi_button_state == LOW && midi_button_state != midi_button_action) {
     midi_button_action = midi_button_state;
     delay(20);
   }
 }
 
+// -----------------------------------------------------------------------------
+// Sequencer
+// -----------------------------------------------------------------------------
+
 void sequencer() {
-
   static byte place = 0;
-  int count = 0;
 
-  if ((millis() > time) && on == true) {
+  if (!sequencer_on) {
+    digitalWrite(gate_out, LOW);
+    analogWrite(cv_out, 0);
+    return;
+  }
 
-    midi_note_off(midi_channel, note_sq, velocity_off);
-    midi_note_off(midi_channel, note_MSG, velocity_off);
+  // Time for next step?
+  if ((long)(millis() - next_step_ms) >= 0) {
+    // End previous step note
+    midi_note_off(kMidiChannel, note_sq, velocity_off);
 
+    // Short play/click strobe on the "play" output
     for (int i = 0; i < 3; i++) {
-
       digitalWrite(play, HIGH);
       delay(2);
       digitalWrite(play, LOW);
     }
 
+    // Advance and schedule next beat (60000 ms / BPM)
     place++;
-    if (place >= bLength) place = 0;
-    unsigned long milliseconds_per_minute = 10000 * 60;
-    time = millis() + milliseconds_per_minute / beats_per_minute;
-    while (b_read(&sequence[rhythm][place]) == 0 && count < bLength) {
+    if (place >= kPatternLength) place = 0;
+    next_step_ms = millis() + (60000UL / beats_per_minute);
+
+    // Skip rests (EY). Old code compared to 0, but rests are EY=128.
+    byte skips = 0;
+    while (b_read(&sequence[rhythm][place]) == EY && skips < kPatternLength) {
       place++;
-      if (place >= bLength) place = 0;
-      count++;
+      if (place >= kPatternLength) place = 0;
+      skips++;
     }
-    pitch_bend((0xE0 | midi_channel), pitchLSB, pitchMSB);
+
     note_sq = b_read(&sequence[rhythm][place]);
-    note_sq = w_read(&sequence[rhythm][place]);
+    // BUGFIX: previous firmware then overwrote note_sq with pgm_read_dword_near
+    // on a byte table — that corrupted the note value. Use byte reads only.
 
-    if (count < bLength && on == true) {
-      if (b_read(&sequence[rhythm][place]) != EY) {
-        if (digitalRead(changer) == HIGH && on == true) {
-          byte fill = map(changer_instrument, 0, 1023, 30, 0);
-          note_sq = note_sq + fill;
+    update_pitch_bend_if_needed(false);
 
-        } else {
-          if ((digitalRead(note_trigger) == HIGH && on == true)) {
-            note = map(note_raw, 0, 1023, 30, 0);
-            note_sq = note + note_sq;
+    if (skips < kPatternLength && note_sq != EY) {
+      int sounding = note_sq;
 
-          }
-        }
-        midi_note_on(midi_channel, note_sq, velocity_level);
-        pitch_bend((0xE0 | midi_channel), pitchLSB, pitchMSB);
-      } else {
-
-        if (w_read(&sequence[rhythm][place]) == EY) {
-          midi_note_off(midi_channel, note_sq, velocity_off);
-        }
+      if (digitalRead(changer) == HIGH) {
+        int fill = map(changer_instrument, 0, 1023, 30, 0);
+        sounding += fill;
+      } else if (digitalRead(note_trigger) == HIGH) {
+        // Live transpose from note CV while playing
+        int transpose = map(note_raw, 0, 1023, 30, 0);
+        sounding += transpose;
       }
-    }
-    last_time = time;
-  }
-  if (b_read(&sequence[rhythm][place]) >= minNote && b_read(&sequence[rhythm][place]) <= maxNote ) {
 
+      note_sq = clamp_midi_note(sounding);
+      midi_note_on(kMidiChannel, note_sq, velocity_level);
+      update_pitch_bend_if_needed(true);
+    }
+  }
+
+  // Gate / CV from current step
+  if (note_sq != EY && note_sq >= kMinNote && note_sq <= kMaxNote) {
     digitalWrite(gate_out, HIGH);
     analogWrite(cv_out, note_sq);
   } else {
-    if (note_sq == EY) {
-      digitalWrite(gate_out, LOW);
-      analogWrite(cv_out, 0);
-
-    }
-  }
-  if ( on == false ) {
     digitalWrite(gate_out, LOW);
-    midi_note_off(midi_channel, note_sq, velocity_off);
     analogWrite(cv_out, 0);
   }
 }
 
+// -----------------------------------------------------------------------------
+// MIDI message builders
+// -----------------------------------------------------------------------------
 
-// MIDI Processor
-
-// Send a MIDI note-on message.
-void midi_note_on(byte channelMIDI, byte noteMIDI, byte velocityMIDI) {
-  midiMsg( (0x90 | channelMIDI), noteMIDI, velocityMIDI);
+void midi_note_on(byte channel, byte noteMIDI, byte velocityMIDI) {
+  // channel is 0..15
+  midiMsg((byte)(0x90 | (channel & 0x0F)), noteMIDI, velocityMIDI);
 }
 
-// Send a MIDI note-off message.
-void midi_note_off(byte channelMIDI, byte noteMIDI, byte velocityMIDI) {
-  midiMsg( (0x80 |  channelMIDI), noteMIDI, velocityMIDI);
+void midi_note_off(byte channel, byte noteMIDI, byte velocityMIDI) {
+  midiMsg((byte)(0x80 | (channel & 0x0F)), noteMIDI, velocityMIDI);
 }
 
-// Send a MIDI control message.
-void midi_modulation(byte channelMIDI, byte modulationCC, byte modulationMIDI) {
-  midiMsg( (0xB0 |  channelMIDI), modulationCC, modulationMIDI);
-
+void pitch_bend(byte channel, byte lsb, byte msb) {
+  // Pass channel index only — do not pre-OR 0xE0 at the call site
+  midiMsg((byte)(0xE0 | (channel & 0x0F)), lsb, msb);
 }
 
-// Send a MIDI Pitch_Bend  message.
-void pitch_bend(byte channelMIDI, byte LSB, byte MSB) {
-  midiMsg( (0xE0 | channelMIDI), LSB, MSB);
+void midi_all_notes_off(byte channel) {
+  // CC 123 All Notes Off
+  midiMsg((byte)(0xB0 | (channel & 0x0F)), 123, 0);
 }
 
-//  Send a two byte midi message
-void midi_program(byte statusProgram, byte data ) {
-  Serial.write(byte (statusProgram));
-  Serial.write(byte (data));
-
-}
-
-// Send a General MIDI message
 void midiMsg(byte cmd, byte data1, byte data2) {
-  Serial.write(byte (cmd));
-  Serial.write(byte (data1));
-  Serial.write(byte (data2));
+  Serial.write(cmd);
+  Serial.write(data1);
+  Serial.write(data2);
 }
 
+// MIDI-in → gate / CV (when midi_mode_on)
 void HandleNoteOn(byte channel, byte incoming_note, byte velocity) {
-  if (incoming_note >= minNote && incoming_note <= maxNote ) {
+  (void)channel;
+  (void)velocity;
+  if (incoming_note >= kMinNote && incoming_note <= kMaxNote) {
     analogWrite(cv_out, incoming_note);
     digitalWrite(gate_out, HIGH);
   }
 }
 
 void HandleNoteOff(byte channel, byte incoming_note, byte velocity) {
-  if (incoming_note >= minNote && incoming_note <= maxNote) {
+  (void)channel;
+  (void)velocity;
+  if (incoming_note >= kMinNote && incoming_note <= kMaxNote) {
     analogWrite(cv_out, 0);
     digitalWrite(gate_out, LOW);
   }

@@ -15,7 +15,7 @@ Contact: [diodac.electronics@gmail.com](mailto:diodac.electronics@gmail.com)
 | [Link_Drum](Link_Drum/README.md) | Link_Drum firmware and production assets, including AT89C52 HEX, Atmega 328 Arduino source, Gerbers, BOM/CPL files, DXF panels, and pattern notes. |
 | [MIDI_Bass_Guitar](MIDI_Bass_Guitar/README.md) | PIC16F88 bass-to-MIDI assembly source, HEX output, and related source text. |
 | [PENELOOPE](PENELOOPE/README.md) | Teensy/Arduino DSP pedal firmware with display/audio processing source plus Gerbers, BOM/CPL, and front-panel files. |
-| [Wifi_MIDI](Wifi_MIDI/README.md) | ESP8266 WiFi MIDI bridge source using WiFiManager provisioning and AppleMIDI/rtpMIDI routing. |
+| [Wifi_MIDI](Wifi_MIDI/README.md) | ESP8266 + ESP32-S3 WiFi MIDI bridges (WiFiManager provisioning, AppleMIDI/rtpMIDI). |
 
 The original Web DAW Bridge integration contract remains in [DEVELOPER_SSOT.md](DEVELOPER_SSOT.md). Use it only for the `browser-extension/` and `native-host/` bridge workflow.
 

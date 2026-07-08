@@ -3,174 +3,172 @@
   Licensed under the MIT License.
   Contact: diodac.electronics@gmail.com
 
-     MULTI EFFECT DSP WITH LOOPER
-            "PENELOOPE"
-         DIODAC ELECTRONICS
-              REV. 2.0  
+  PENELOOPE — multi-effect DSP with looper (Rev 2.0)
+  Target: Teensy (IntervalTimer audio ISR @ 60 µs ≈ 16.7 kHz)
+
+  Signal path:
+    ADC audioIn -> fx queue -> effect -> queue1 -> wet/dry/looper mix -> MCP4921 DAC
 */
-IntervalTimer timer;
+
 #include <SPI.h>
 #include <Wire.h>
 #include <ADC.h>
 #include <ADC_util.h>
-ADC *adc = new ADC();
 #include <CircularBuffer.h>
-CircularBuffer<int32_t, 128> queue;
-CircularBuffer<int32_t, 128> queue1;
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Fonts/FreeSerif9pt7b.h>
 #include <Fonts/FreeMonoBold9pt7b.h>
 
-//IO
-#define led  4
-#define A  5
-#define B  6
-#define button  7
-#define dac_latch 9
-#define dac_cs 10
+ADC *adc = new ADC();
+IntervalTimer timer;                 // audio ISR clock
+CircularBuffer<int32_t, 128> queue;  // incoming samples for FX
+CircularBuffer<int32_t, 128> queue1; // FX output toward mixer
 
-//Display settings
-#define OLED_ADDR   0x3C
-#define SCREEN_WIDTH 128
+// ---------- Pins ----------
+#define led        4   // FX-parameter LED (lit when ext CV selected)
+#define ENC_A      5   // rotary encoder A
+#define ENC_B      6   // rotary encoder B
+#define button     7   // bypass footswitch (active LOW)
+#define dac_latch  9   // MCP4921 LDAC
+#define dac_cs    10   // MCP4921 CS
+#define recordLed  0
+#define replayLed  1
+#define recordPin  2   // looper record (active LOW)
+#define stopPin    3   // looper stop hold (active LOW)
+#define EXT_CV_BTN 22  // external CV engage
+
+// Legacy aliases used throughout FX / UI code
+#define A ENC_A
+#define B ENC_B
+
+// ---------- OLED ----------
+#define OLED_ADDR     0x3C
+#define SCREEN_WIDTH  128
 #define SCREEN_HEIGHT 64
-#define OLED_RESET  -1
+#define OLED_RESET    -1
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-String nameEffect[34] = {"CLEAN", "DISTRO", "FUZZLE",
-                         "CRUSH", "OVER", "DETUNE",
-                         "PITCH-UP", "PITCH-DN", "FLANGE",
-                         "PITCHDEL", "DELAY", "DELONG", "ECHO",
-                         "ECHOLONG", "REVERSE", "TREMOLO",
-                         "LFO", "PENTAVER", "HEXAVER",
-                         "SEPTAVER", "RIDOO", "WOODOO",
-                         "MODULATE", "WOBBLE", "TRIDULATE",
-                         "SINE", "TRIANGLE", "CHORUS",
-                         "Q-RES", "DEEP-WAH", "WAH-WAH",
-                         "ROOM", "REVERPLEX", "REVERB"
-                        };
+// Effect names on OLED (index == encoder 0..33)
+const char *const nameEffect[34] = {
+  "CLEAN", "DISTRO", "FUZZLE", "CRUSH", "OVER", "DETUNE",
+  "PITCH-UP", "PITCH-DN", "FLANGE", "PITCHDEL", "DELAY", "DELONG",
+  "ECHO", "ECHOLONG", "REVERSE", "TREMOLO", "LFO", "PENTAVER",
+  "HEXAVER", "SEPTAVER", "RIDOO", "WOODOO", "MODULATE", "WOBBLE",
+  "TRIDULATE", "SINE", "TRIANGLE", "CHORUS", "Q-RES", "DEEP-WAH",
+  "WAH-WAH", "ROOM", "REVERPLEX", "REVERB"
+};
 
-//Multipicator
+// Fixed-point multiply for delay-line / flange interpolators
 inline uint32_t M32x16(uint32_t x, uint32_t y) {
-  return (uint32_t)(((uint32_t)x) * ((uint32_t)y) >> 16);
+  return (uint32_t)(((uint32_t)x * (uint32_t)y) >> 16);
 }
 
-//Sound Level bar variables
+// ---------- Level meter ----------
 #define numGrains 128
 int FASTRUN image[numGrains];
 int FASTRUN real[numGrains];
 volatile int bar = 0;
 
-//Main variables
-elapsedMillis counter;
-elapsedMillis count;
-elapsedMillis button_time;
-elapsedMillis counterMillis;
-elapsedMillis refresh;
-boolean last_readings = false;
-boolean state = true;
-boolean on = false;
-boolean ext_state = true;
-boolean ext_on = false;
-volatile boolean cln = false;
-#define bias 512
-boolean active = false;
+// ---------- Timing / UI ----------
+elapsedMillis counter;       // OLED refresh
+elapsedMillis count;         // LFO / tremolo pacing
+elapsedMillis button_time;   // looper stop hold
+elapsedMillis counterMillis; // looper sample clock
+elapsedMillis refresh;       // pot ADC throttle (~4 ms)
+bool last_readings = false;
+bool state = true;           // bypass switch debounce mirror
+bool bypass = false;         // true = hard dry path to DAC
+bool ext_state = true;
+bool ext_on = false;         // use external CV for FX level
+volatile bool cln = false;   // CLEAN / bypass display flag
+#define bias 512             // mid-rail for ~10-bit bipolar audio
+bool active = false;         // near-silence detector
 int32_t output_vol = 0, loop_vol = 0, mix_channel = 0, master = 0;
-volatile static byte last_encoder = 0, encoder = 0;
-int32_t audioIn = 0, audioOut = 0, main_out = 0, dry = 0, input = bias, output = bias, bufferOutput = bias;
-int fx_pot = 0, external = 0;
-volatile int level = 0;
+volatile byte encoder = 0;   // selected effect 0..33
+int32_t audioIn = 0, audioOut = 0, main_out = 0, dry = 0;
+int32_t input = bias, output = bias, bufferOutput = bias;
+int fx_pot = 0, external_cv = 0;
+volatile int level = 0;      // FX parameter (pot or external)
 
-//LPF variables
+// ---------- Shared LPF state ----------
 int32_t x_1 = 0, d_1 = 0;
 long f_1 = 0;
 
-//Main buffers
-#define bufferSizeAverage  32
+// ---------- Delay / FX buffers ----------
+#define bufferSizeAverage 32
 int FASTRUN bufferAverage[bufferSizeAverage];
 int indexAverage = 0;
-boolean wipe = false;
+bool wipe = false;           // encoder turned — mute / request flush
+volatile uint8_t clear_req = 0; // 1=main delay, 2=AB line, 3=reverb (done in loop)
+volatile bool wipe_loop_req = false; // clear looper timestamp table off-ISR
 #define bufferSize 48000
 int FASTRUN buffer[bufferSize];
 
-//Oscillators
+// Wavetable length (indices 0..points-1)
 #define points 2047
-unsigned int FASTRUN modulation[points];
+float FASTRUN modulation[points]; // 0.99 * cos — used as ±1 depth by chorus/wah FX
 unsigned int FASTRUN sine[points];
 unsigned int FASTRUN cosine[points];
 
-//Effect variables
+// ---------- Distortion helpers ----------
 #define ShiftBits_amplitude 2
 #define AmplitudeMax 0x0200
 int distortion = 0, fuzz = 0, bit_crush = 0, amplitude = 0;
 double threshold = 0.2, in_0 = 0;
 
-//Flange & Shifters
-#define MIN 2 //~60us distance
-#define MAX 400 //~ 8.5ms distance
+// ---------- Flange / pitch shifter ----------
+#define MIN 2    // ~60 us min delay
+#define MAX 400  // ~8.5 ms max delay
 #define SIZE 400
 #define pitch 11700
 byte dir = 1;
-unsigned int utime = 0, offset = 0, increment = 0, divider = 0, distance = 0, fractional = 0x00;
-int speed = 0, sample = 0, time = 0;
+unsigned int utime = 0, offset = 0, increment = 0, divider = 0, distance = 0, fractional = 0;
+int speed = 0, sample = 0, time = 0; // FX delay/modulation depth parameter
 int32_t resultA = 0, resultB = 0, outputA = 0, outputB = 0;
 
-//Modulators & Wobbies++
+// ---------- Chorus / wah delay lines ----------
 #define space 350
 #define maximum 300
 unsigned int wave = bias;
 int modulation_in = 0;
 int FASTRUN AB[maximum];
-int32_t delay_line = 0, line_A = 0, line_B = 0, calculator = 0, fraction = 0;
+int32_t delay_line = 0, line_A = 0, line_B = 0, calculator = 0;
+double fraction = 0; // was int32_t — must be float for interpolators
 double down = -0.5, down1 = -0.98, down2 = -0.8;
-double up =  0.5, up1 = 0.98, up2 = 0.8;
+double up = 0.5, up1 = 0.98, up2 = 0.8;
 
-//Reverb+++++++++++++++
-#define D1  4000
-#define D2  4000
-#define D3  4000
-#define D4  4000
-#define D5  10000
-#define D6  4000
-int  DV1 = 100;
-int  DV2 = 100;
-int  DV3 = 150;
-int  DV4 = 200;
-int  DV5 = 400;
-int  DV6 = 200;
-double  x1 = 0.69, x2 = 0.64, x3 = 0.59, x4 = 0.54;
-double  y_1 = 0.99 , y_2 = 0.94 , y_3 = 0.89 , y_4 = 0.84;
-int FASTRUN X1[D1];
-int FASTRUN X2[D2];
-int FASTRUN X3[D3];
-int FASTRUN X4[D4];
-int FASTRUN X5[D5];
-int FASTRUN X6[D6];
-int32_t  S1 = 0, S2 = 0, S3 = 0, S4 = 0, S5 = 0, S6 = 0, S7 = 0;
-long  DC1 = 0, DC2 = 0, DC3 = 0, DC4 = 0, DC5 = 0, DC6 = 1, DC7 = 1, DC8 = 0;
-//++++++++++++++++++++
+// ---------- Multi-tap reverb ----------
+#define D1 4000
+#define D2 4000
+#define D3 4000
+#define D4 4000
+#define D5 10000
+#define D6 4000
+int DV1 = 100, DV2 = 100, DV3 = 150, DV4 = 200, DV5 = 400, DV6 = 200;
+double x1 = 0.69, x2 = 0.64, x3 = 0.59, x4 = 0.54;
+double y_1 = 0.99, y_2 = 0.94, y_3 = 0.89, y_4 = 0.84;
+int FASTRUN X1[D1], X2[D2], X3[D3], X4[D4], X5[D5], X6[D6];
+int32_t S1 = 0, S2 = 0, S3 = 0, S4 = 0, S5 = 0, S6 = 0, S7 = 0;
+long DC1 = 0, DC2 = 0, DC3 = 0, DC4 = 0, DC5 = 0, DC6 = 1, DC7 = 1, DC8 = 0;
 
-//Looper++++++++++++++
-#define loopLength 85000 //~8.5 sec audio recording
-#define recordLed 0
-#define replayLed 1
-#define recordPin 2
-#define stopPin   3
+// ---------- Looper (~8.5 s) ----------
+#define loopLength 85000
 int32_t loopIn = 0, loopOut = bias;
-boolean rec = false, stop = false, ledRec = false, ledPlay = false, looper_run = false;
+bool rec = false, looper_stop = false, looper_run = false;
 unsigned long startTime = 0, endTime = 0, bufferTime = 0;
-boolean recording = false, playback = false;
-unsigned long place;
-volatile int loop_bar;
+bool recording = false, playback = false;
+unsigned long place = 0;
+volatile int loop_bar = 0;
 unsigned long DMAMEM position[loopLength];
 unsigned short DMAMEM loopAudio[loopLength];
-//++++++++++++++++++++
+
+// Write 12-bit sample to MCP4921 (buffered, gain=1, active: config nibble 0x7)
 void DAC(int32_t data) {
-  //20MHz for MCP4921
+  uint16_t word = (uint16_t)((data & 0x0FFF) | 0x7000);
   SPI.beginTransaction(SPISettings(20000000, MSBFIRST, SPI_MODE3));
   digitalWriteFast(dac_cs, LOW);
-  SPI.transfer16((data & 0x0FFF) | 0x7000);
-  SPI.transfer16(data & 0xFFF);
+  SPI.transfer16(word);  // single 16-bit frame (was double-transferred)
   digitalWriteFast(dac_cs, HIGH);
   delayNanoseconds(15);
   digitalWriteFast(dac_latch, LOW);
@@ -185,16 +183,19 @@ void setup() {
   digitalWriteFast(dac_cs, HIGH);
   pinMode(dac_latch, OUTPUT);
   digitalWriteFast(dac_latch, HIGH);
+
+  // Quiet unused digital buffers on analog pins
   pinMode(14, INPUT_DISABLE);
   pinMode(15, INPUT_DISABLE);
   pinMode(16, INPUT_DISABLE);
   pinMode(17, INPUT_DISABLE);
   pinMode(20, INPUT_DISABLE);
   pinMode(21, INPUT_DISABLE);
-  pinMode(22, INPUT_PULLUP);
   pinMode(23, INPUT_DISABLE);
-  pinMode(A, INPUT_PULLUP);
-  pinMode(B, INPUT_PULLUP);
+
+  pinMode(EXT_CV_BTN, INPUT_PULLUP);
+  pinMode(ENC_A, INPUT_PULLUP);
+  pinMode(ENC_B, INPUT_PULLUP);
   pinMode(button, INPUT_PULLUP);
   pinMode(led, OUTPUT);
   pinMode(recordLed, OUTPUT);
@@ -203,54 +204,84 @@ void setup() {
   digitalWrite(replayLed, LOW);
   pinMode(recordPin, INPUT_PULLUP);
   pinMode(stopPin, INPUT_PULLUP);
-  on = false;
+
+  bypass = false;
+
   display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
   display.clearDisplay();
   logo();
-  SPI.usingInterrupt(60);
+
   SPI.begin();
+  // Audio ISR every 60 µs (~16.7 kHz). Do not pass the period as SPI IRQ id.
   timer.begin(effect, 60);
   timer.priority(128);
+
   for (unsigned int i = 0; i < bufferSize; i++) {
     buffer[i] = bias;
   }
+  buffclr1();
+  buffclr2();
   modulation_generator();
   sine_generator();
   cosine_generator();
-  //ADC0
+
+  // ADC0: 12-bit FX pot (A9)
   adc->adc0->setAveraging(16);
-  adc->adc0->setResolution(12); //resolution
+  adc->adc0->setResolution(12);
   adc->adc0->setConversionSpeed(ADC_CONVERSION_SPEED::MED_SPEED);
   adc->adc0->setSamplingSpeed(ADC_SAMPLING_SPEED::MED_SPEED);
   adc->adc0->setReference(ADC_REFERENCE::REF_3V3);
-  //ADC1
-  adc->adc0->setAveraging(16);
-  adc->adc1->setResolution(10); //resolution
-  adc->adc1->setConversionSpeed(ADC_CONVERSION_SPEED::MED_SPEED); // change the conversion speed
-  adc->adc1->setSamplingSpeed(ADC_SAMPLING_SPEED::MED_SPEED); // change the sampling speed
+
+  // ADC1: 10-bit audio / CV / mix (was incorrectly setAveraging on adc0)
+  adc->adc1->setAveraging(16);
+  adc->adc1->setResolution(10);
+  adc->adc1->setConversionSpeed(ADC_CONVERSION_SPEED::MED_SPEED);
+  adc->adc1->setSamplingSpeed(ADC_SAMPLING_SPEED::MED_SPEED);
   adc->adc1->setReference(ADC_REFERENCE::REF_3V3);
 }
 
 void loop() {
-  if (counter >= 64) {//Display refresh 64ms
+  // Heavy buffer clears requested by ISR (must not run at audio rate)
+  if (clear_req == 1) {
+    clear_req = 0;
+    buffclr();
+  } else if (clear_req == 2) {
+    clear_req = 0;
+    buffclr1();
+  } else if (clear_req == 3) {
+    clear_req = 0;
+    buffclr2();
+  }
+
+  if (wipe_loop_req) {
+    wipe_loop_req = false;
+    wipeBuffer();
+  }
+
+  // OLED refresh — audio stays in IntervalTimer ISR
+  if (counter >= 64) {
     counter = 0;
     displayShow();
   }
 }
 
 void modulation_generator() {
-  for (int i = 0; i < points; i++)
-    modulation[i] = (0.99 * cos(((2.0 * PI) / points) * i));
+  // Store actual ±0.99 cosine. Storing into unsigned int truncated nearly all values to 0.
+  for (int i = 0; i < points; i++) {
+    modulation[i] = (float)(0.99 * cos((2.0 * PI * i) / (double)points));
+  }
 }
 
 void sine_generator() {
-  for (int i = 0; i < points; i++)
-    sine[i] = (((0.99 + sin(((2.0 * PI) / points) * i)) * points) / 2);
+  for (int i = 0; i < points; i++) {
+    sine[i] = (unsigned int)(((0.99 + sin((2.0 * PI * i) / (double)points)) * points) / 2.0);
+  }
 }
 
 void cosine_generator() {
-  for (int i = 0; i < points; i++)
-    cosine[i] = (((0.99 + cos(((2.0 * PI) / points) * i)) * points) / 2);
+  for (int i = 0; i < points; i++) {
+    cosine[i] = (unsigned int)(((0.99 + cos((2.0 * PI * i) / (double)points)) * points) / 2.0);
+  }
 }
 
 void buffclr() {
@@ -265,35 +296,37 @@ void buffclr1() {
   }
 }
 
+// Zero multi-tap reverb lines (do not drain the live audio queue)
 void buffclr2() {
-  while (!queue.isEmpty()) {
-    for (int i = 0; i < 4000; i++) {
-      X1[i] = (queue.pop() + x1 * X1[i] / 1.2);
-      X2[i] = (queue.pop() + x2 * X2[i] / 1.4);
-      X3[i] = (queue.pop() * X3[i] / 1.6);
-      X4[i] = (queue.pop() * X4[i] / 1.8);
-    }
-  }
+  for (int i = 0; i < D1; i++) X1[i] = 0;
+  for (int i = 0; i < D2; i++) X2[i] = 0;
+  for (int i = 0; i < D3; i++) X3[i] = 0;
+  for (int i = 0; i < D4; i++) X4[i] = 0;
+  for (int i = 0; i < D5; i++) X5[i] = 0;
+  for (int i = 0; i < D6; i++) X6[i] = 0;
+  DC1 = DC2 = DC3 = DC4 = DC5 = DC8 = 0;
+  DC6 = DC7 = 1;
+  S1 = S2 = S3 = S4 = S5 = S6 = S7 = 0;
 }
 
 void effect() {
-  audioIn = adc->adc1->analogRead(A2);
-  audioIn = map(audioIn - bias, 0, 1023, 0, 1023) + bias;
-  if (audioIn == bias) active = true; else active = false;
+  // 10-bit audio on A2 (ADC1), mid-rail at `bias`
+  audioIn = constrain(adc->adc1->analogRead(A2), 0, 1023);
+  active = (audioIn == bias); // near mid-rail = "silent" for synth FX gates
   queue.unshift(audioIn);
 
-  if (looper_run == false || on == true) {
-    for (int i = 0; i < numGrains; i++)
-    {
-      real[i] = (audioIn - bias) >> 1;
-      image[i] = 0;
-      bar = sqrt(real[i] * real[i]) + (image[i] * image[i]);
-    }
-  } else bar = map(place / 100, 0, 850, 0, 127);
+  // Level meter (single sample — previous loop wrote the same value 128× per tick)
+  if (looper_run == false || bypass == true) {
+    int32_t amp = (audioIn - bias) >> 1;
+    if (amp < 0) amp = -amp;
+    bar = (int)constrain(amp, 0, 127);
+  } else {
+    bar = map((int)(place / 100UL), 0, 850, 0, 127);
+  }
 
   Button();
 
-  if (on == false) {//Bypas false
+  if (bypass == false) { // effects active
     Encoder();
     control();
     save_loop();
@@ -304,49 +337,37 @@ void effect() {
       refresh = 0;
       addAverage(adc->adc0->analogRead(A9));
       fx_pot = map(average(), 0, 4095, 0, 1023);
-      external = constrain(adc->adc1->analogRead(A7), 0, 1023);
+      external_cv = constrain(adc->adc1->analogRead(A7), 0, 1023);
       loop_vol = adc->adc1->analogRead(A0);
       output_vol = adc->adc1->analogRead(A1);
       master = adc->adc1->analogRead(A3);
       mix_channel = adc->adc1->analogRead(A6);
 
-      if (encoder == 0) cln = true; else cln = false;
-      if (ext_on == true)level = external, digitalWrite(led, HIGH); else level = fx_pot, digitalWrite(led, LOW);
-      if (!digitalRead(A) || !digitalRead(B)) wipe = true, bufferOutput = bias, audioOut = bias, main_out = bias, output = bias, input = bias; else wipe = false;
-      if (wipe == true && encoder == 9) {
-        buffclr();
-      } else if (wipe == true && encoder == 10) {
-        buffclr();
-      } else if (wipe == true && encoder == 11) {
-        buffclr();
-      } else if (wipe == true && encoder == 12) {
-        buffclr();
-      } else if (wipe == true && encoder == 13) {
-        buffclr();
-      } else if (wipe == true && encoder == 14) {
-        buffclr();
-      } else if (wipe == true && encoder == 20) {
-        buffclr1();
-      } else if (wipe == true && encoder == 21) {
-        buffclr1();
-      } else if (wipe == true && encoder == 22) {
-        buffclr1();
-      } else if (wipe == true && encoder == 26) {
-        buffclr1();
-      } else if (wipe == true && encoder == 27) {
-        buffclr1();
-      } else if (wipe == true && encoder == 28) {
-        buffclr1();
-      } else if (wipe == true && encoder == 29) {
-        buffclr1();
-      } else if (wipe == true && encoder == 30) {
-        buffclr1();
-      } else if (wipe == true && encoder == 31) {
-        buffclr();
-      } else if (wipe == true && encoder == 32) {
-        buffclr();
-      } else if (wipe == true && encoder == 33) {
-        buffclr2();
+      cln = (encoder == 0);
+
+      if (ext_on) {
+        level = external_cv;
+        digitalWrite(led, HIGH);
+      } else {
+        level = fx_pot;
+        digitalWrite(led, LOW);
+      }
+
+      // Encoder motion: mute output briefly and flush buffers for delay-style FX
+      if (!digitalRead(ENC_A) || !digitalRead(ENC_B)) {
+        wipe = true;
+        bufferOutput = audioOut = main_out = output = input = bias;
+      } else {
+        wipe = false;
+      }
+
+      if (wipe) {
+        // Request flush from loop() — avoids multi-ms work inside the audio ISR
+        if (encoder >= 9 && encoder <= 14) clear_req = 1;
+        else if (encoder == 31 || encoder == 32) clear_req = 1;
+        else if (encoder == 20 || encoder == 21 || encoder == 22 ||
+                 (encoder >= 26 && encoder <= 30)) clear_req = 2;
+        else if (encoder == 33) clear_req = 3;
       }
     }
 
@@ -455,24 +476,28 @@ void effect() {
         break;
     }
 
-    loopIn = constrain(map(output - bias, 0, 1023, 0, 1023) + bias, 0, 1023);
+    // Capture wet sample for looper; pull last FX sample from queue1
+    loopIn = constrain(output, 0, 1023);
     while (!queue1.isEmpty()) {
       bufferOutput = queue1.pop();
     }
-    //Mixer audio
+
+    // Wet gain, loop gain, dry blend, then master (>>1 maps ~10-bit to 12-bit DAC half-scale)
     bufferOutput = map(bufferOutput - bias, 0, 1023, 0, output_vol) + bias;
     loopOut = map(loopOut - bias, 0, 1023, 0, loop_vol) + bias;
-    audioOut = constrain(((0.75 * (bufferOutput - bias) + 0.75 * (loopOut - bias)) + bias), 0, 1023);
-    audioOut = map(audioOut - bias, 0, 1023, 0, 1023) + bias;
-    dry = map(audioIn - bias, 0, 1023, 0,  mix_channel) + bias;
-    main_out = constrain(((0.75 * (audioOut - bias) + 0.75 * (dry - bias)) + bias), 0, 1023);
+    audioOut = constrain((int32_t)(0.75 * (bufferOutput - bias) + 0.75 * (loopOut - bias) + bias), 0, 1023);
+    dry = map(audioIn - bias, 0, 1023, 0, mix_channel) + bias;
+    main_out = constrain((int32_t)(0.75 * (audioOut - bias) + 0.75 * (dry - bias) + bias), 0, 1023);
     main_out = map(main_out - bias, 0, 1023, 0, master) + bias;
-    main_out = map(main_out - bias, 0, 1023, 0, 1023) + bias;
     DAC(main_out >> 1);
-  } else if (on == true) DAC(audioIn >> 1);
+  } else {
+    // Hard bypass: dry ADC → DAC
+    DAC(audioIn >> 1);
+  }
 }
 
-void clean_fx () {
+/* ---- Effects (called from audio ISR; keep work light) ---- */
+void clean_fx() {
   while (!queue.isEmpty()) {
     output = map(queue.pop() - bias, 0, 1023, 0, 1023) + bias;
   }
@@ -657,33 +682,34 @@ void pitch_down_fx() {
 }
 
 void flange_fx() {
+  // One sample per ISR tick — reuse dry (do not pop an empty queue for wet/dry mix)
   while (!queue.isEmpty()) {
     static int locationIn = SIZE, locationOut = SIZE - fractional;
-    buffer[locationIn] = queue.pop() * 3.01;
+    int32_t dry_s = queue.pop();
+    buffer[locationIn] = dry_s * 3.01;
     locationIn++;
     if (locationIn >= SIZE) locationIn = 0;
     locationOut = locationIn - (fractional >> 8);
     if (locationOut < 0) locationOut += SIZE;
-    outputA = buffer[locationOut] + queue.pop();
+    outputA = buffer[locationOut] + dry_s;
     locationOut -= 1;
     if (locationOut < 0) locationOut += SIZE;
-    outputB = buffer[locationOut] + queue.pop();
+    outputB = buffer[locationOut] + dry_s;
     resultA = M32x16(outputA, ((0xff - (fractional & 0x00ff)) << 7));
     resultB = M32x16(outputB, ((fractional & 0x00ff) << 7));
-    output = constrain(map(resultA += resultB, 0, 2047, 0, 1023), 0, 1023) ;
+    output = constrain(map(resultA += resultB, 0, 2047, 0, 1023), 0, 1023);
     output = map(output - bias, 0, 1023, 0, 1023) + bias;
     int shift = level >> 6;
     if (shift >= 11) shift = 11;
     if (dir) {
       if ((fractional >> 8) >= MAX) dir = 0;
       fractional += (1 + shift);
-    }
-    else {
+    } else {
       if ((fractional >> 8) <= MIN) dir = 1;
       fractional -= (1 + shift);
     }
   }
-  if (wipe == false)queue1.unshift(output);
+  if (wipe == false) queue1.unshift(output);
 }
 
 void pitchdel_fx () {
@@ -1223,10 +1249,12 @@ void reverb_fx() {
     DV5 = map(level << 2, 0, 4095, 400, 10000);
     DV6 = map(level << 2, 0, 4095, 200, 4000);
 
-    X1[DC1] = (queue.pop() + x1 * X1[DC1] / 1.2);
-    X2[DC2] = (queue.pop() + x2 * X2[DC2] / 1.4);
-    X3[DC3] = (queue.pop() * X3[DC3] / 1.6);
-    X4[DC4] = (queue.pop() * X4[DC4] / 1.8);
+    // One input sample feeds all taps (queue only holds ~1 sample per ISR)
+    int32_t xin = queue.pop();
+    X1[DC1] = (xin + x1 * X1[DC1] / 1.2);
+    X2[DC2] = (xin + x2 * X2[DC2] / 1.4);
+    X3[DC3] = (xin * X3[DC3] / 1.6);
+    X4[DC4] = (xin * X4[DC4] / 1.8);
 
     S1 =  y_1 * X1[DC1];
     S2 =  y_2 * X2[DC2];
@@ -1269,50 +1297,36 @@ int average() {
 }
 
 void Encoder() {
-  boolean readings = digitalRead(A);
-  if ((last_readings == true) && (readings == false))
-  {
-    if (digitalRead(B) == LOW)
-    {
-      encoder = encoder + 1.0;
-    } else
-    {
-      encoder = encoder - 1.0;
+  // Falling edge on ENC_A; ENC_B selects direction
+  bool readings = digitalRead(ENC_A);
+  if (last_readings == true && readings == false) {
+    if (digitalRead(ENC_B) == LOW) {
+      if (encoder < 33) encoder++;
+    } else {
+      if (encoder > 0) encoder--;
     }
-    encoder = min(encoder, 33);
-    encoder = max(encoder, 0);
-    encoder = constrain(encoder, 0, 33);
   }
   last_readings = readings;
 }
 
 void Button() {
-  boolean change = digitalRead(button);
-  if (change == false && change != state)
-  {
-    on = ! on;
+  // Edge detect only — no delay*() inside the audio ISR
+  bool change = digitalRead(button);
+  if (change != state) {
+    if (change == false) {
+      bypass = !bypass;
+    }
     state = change;
-    delayMicroseconds(3000);
-  }
-  if (change == true && change != state)
-  {
-    state = change;
-    delayMicroseconds(3000);
   }
 }
 
 void ext_button() {
-  boolean change = digitalRead(22);
-  if (change == false && change != ext_state)
-  {
-    ext_on = ! ext_on;
+  bool change = digitalRead(EXT_CV_BTN);
+  if (change != ext_state) {
+    if (change == false) {
+      ext_on = !ext_on;
+    }
     ext_state = change;
-    delayMicroseconds(3000);
-  }
-  if (change == true && change != ext_state)
-  {
-    ext_state = change;
-    delayMicroseconds(3000);
   }
 }
 
@@ -1320,22 +1334,24 @@ void control() {
   static  unsigned long debounce = 0;
   static  long debounceTime = 100;
   rec = !digitalRead(recordPin);
-  boolean check_button = !digitalRead(stopPin);
+  bool check_button = !digitalRead(stopPin);
   if (check_button && button_time >= 1000) {
     button_time = 0;
-    stop = true;
-  } else stop = false;
+    looper_stop = true;
+  } else {
+    looper_stop = false;
+  }
 
   if (recording == true)  digitalWrite(recordLed, HIGH); else digitalWrite(recordLed, LOW);
   if (playback == true) digitalWrite(replayLed, HIGH); else digitalWrite(replayLed, LOW);
 
-  if (!recording && rec && !stop && counterMillis >= debounce) {
+  if (!recording && rec && !looper_stop && counterMillis >= debounce) {
     recording = true;
     looper_run = true;
     debounce = counterMillis + debounceTime;
     if (playback) {
       playback = false;
-      wipeBuffer();
+      wipe_loop_req = true; // defer 85k wipe to loop()
     }
     startTime = counterMillis;
   }
@@ -1348,14 +1364,14 @@ void control() {
     bufferTime = counterMillis - startTime;
     prepBuffer();
   }
-  if (stop) {
+  if (looper_stop) {
     loop_bar = 0;
     recording = false;
     playback = false;
     looper_run = false;
     loopOut = bias;
     bufferOutput = bias;
-    wipeBuffer();
+    wipe_loop_req = true; // defer 85k wipe to loop()
   }
 }
 
@@ -1403,14 +1419,14 @@ void displayShow() {
   display.setTextColor(WHITE);
   display.setFont(&FreeMonoBold9pt7b);
   display.setTextSize(1);
-  if (on == false) {
+  if (bypass == false) {
     display.setCursor(2, 13);
     display.println(nameEffect[encoder]);
-  } else if (on == true) {
+  } else { // bypassed
     cln = true;
     display.setCursor(37, 13);
     display.setTextSize(1);
-    display.println("BYPAS");
+    display.println("BYPASS");
   }
   if (cln == false) {
     display.setTextColor(WHITE);

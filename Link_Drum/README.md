@@ -17,6 +17,17 @@ The Atmega source path intentionally keeps the original folder name with a space
 
 Hardware and manufacturing filenames are preserved to avoid breaking external references or CAD/CAM workflows.
 
+### Atmega firmware (Rev 1.01) maintenance notes
+
+`Link_Drum_Rev_1.01.ino` was cleaned up for correctness while keeping hardware behaviour:
+
+- BPM step timing uses `60000 / BPM` (was `10000 * 60`)
+- Sequencer rest skips look for `EY` (128), not `0`
+- PROGMEM pattern reads are byte-only (removed erroneous dword overwrite)
+- Pitch-bend messages no longer double-OR the status byte
+- `pinMode` / `digitalWrite` setup corrected for button inputs
+- Mode / stop paths send note-offs and clear gate-CV to avoid stuck notes
+
 ## License
 
 MIT. See the repository [LICENSE](../LICENSE).
